@@ -4,7 +4,7 @@
 
 A foobar2000 component for exporting playlists (M3U, M3U8) and generating CUE sheets directly from the context menu with flexible path and tagging options.
 
-![CUE Settings Screenshot](screenshot.png)
+![CUE Settings Screenshot](Screenshot.png)
 
 ## Features
 * **M3U / M3U8 Export:** Save selected tracks as standard M3U or M3U8 playlists (includes `#EXTINF` metadata support).
