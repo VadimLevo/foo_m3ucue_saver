@@ -19,6 +19,10 @@ A foobar2000 component for exporting playlists (M3U, M3U8) and generating CUE sh
 ## Usage
 Select one or more tracks in your playlist, right-click, and navigate to the context menu (by default, it should be under the main context menu or `Utils`). Select **Save as M3U**, **Save as M3U8 (EXTINF)**, or **Save as CUE Sheet...**. Configuration for default behaviors and paths can be found in the foobar2000 Advanced Preferences.
 
+## v1.1.1
+* Fixed saving CUE from image CUE.
+* Added preferences page Dark Theme.
+
 ---
 
 <a id="русский"></a>
@@ -38,3 +42,7 @@ Select one or more tracks in your playlist, right-click, and navigate to the con
 
 ## Использование
 Выделите нужные треки в плейлисте, нажмите правую кнопку мыши и выберите соответствующий пункт в контекстном меню: **Save as M3U**, **Save as M3U8 (EXTINF)** или **Save as CUE Sheet...**. Поведение по умолчанию, шаблоны имен и пути настраиваются в настройках foobar2000.
+
+## v1.1.1
+* Исправлено сохранение CUE из образа CUE.
+* Добавлена тёмная тема для страницы настроек.
