@@ -23,8 +23,8 @@ Select one or more tracks in your playlist, right-click, and navigate to the con
 * Fixed saving CUE from image CUE.
 * Added a dark theme for the settings page.
 
-## v1.1.6
-* Several bugs fixed.
+## v1.2
+* Improved overall stability, fixed parsing issues, and optimized file-saving routines.
 
 ---
 
@@ -50,5 +50,5 @@ Select one or more tracks in your playlist, right-click, and navigate to the con
 * Исправлено сохранение CUE из образа CUE.
 * Добавлена тёмная тема для страницы настроек.
 
-## v1.1.6
-* Исправлено несколько ошибок.
+## v1.2
+* Повышена общая стабильность работы, исправлены ошибки парсинга и оптимизированы алгоритмы сохранения файлов.
