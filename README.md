@@ -21,7 +21,10 @@ Select one or more tracks in your playlist, right-click, and navigate to the con
 
 ## v1.1.1
 * Fixed saving CUE from image CUE.
-* Added preferences page Dark Theme.
+* Added a dark theme for the settings page.
+
+## v1.1.6
+* Several bugs fixed.
 
 ---
 
@@ -46,3 +49,6 @@ Select one or more tracks in your playlist, right-click, and navigate to the con
 ## v1.1.1
 * Исправлено сохранение CUE из образа CUE.
 * Добавлена тёмная тема для страницы настроек.
+
+## v1.1.6
+* Исправлено несколько ошибок.

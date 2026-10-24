@@ -6,6 +6,13 @@
 
 #pragma comment(lib, "shlwapi.lib")
 
+// --- Вспомогательная функция: безопасное экранирование кавычек для CUE ---
+static pfc::string8 escape_cue_string(const char* input) {
+    pfc::string8 result = input;
+    result.replace_char('\"', '\'');
+    return result;
+}
+
 // --- 1. Форматирование имени файла по шаблону ---
 pfc::string8 export_manager::format_filename(metadb_handle_ptr track, const char* tpl, const file_info* custom_info) {
     titleformat_object::ptr script;
@@ -13,16 +20,13 @@ pfc::string8 export_manager::format_filename(metadb_handle_ptr track, const char
 
     pfc::string8 filename;
 
-    // НОВОЕ: Если переданы кастомные теги из интерфейса, используем их
     if (custom_info != nullptr) {
         script->run_simple(track->get_location(), custom_info, filename);
     }
     else {
-        // Иначе читаем напрямую из metadb (поведение по умолчанию для M3U и т.д.)
         track->format_title(nullptr, filename, script, nullptr);
     }
 
-    // --- Дальше вся твоя текущая очистка (без изменений) ---
     filename.replace_char(':', '-');
     filename.replace_char('/', '-');
     filename.replace_char('\\', '-');
@@ -45,7 +49,6 @@ pfc::string8 export_manager::format_filename(metadb_handle_ptr track, const char
 pfc::string8 export_manager::get_common_dir(metadb_handle_list_cref p_data) {
     if (p_data.get_count() == 0) return "";
 
-    // Берем путь первого файла как базовый
     pfc::string8 common_path = p_data.get_item(0)->get_path();
     if (strncmp(common_path.get_ptr(), "file://", 7) == 0) common_path = common_path.get_ptr() + 7;
 
@@ -53,33 +56,29 @@ pfc::string8 export_manager::get_common_dir(metadb_handle_list_cref p_data) {
     if (slash_idx == pfc::infinite_size) slash_idx = common_path.find_last('/');
     if (slash_idx != pfc::infinite_size) common_path.truncate(slash_idx + 1);
 
-    // Сравниваем базовый путь с путями всех остальных файлов
     for (t_size i = 1; i < p_data.get_count(); ++i) {
         pfc::string8 current_path = p_data.get_item(i)->get_path();
         if (strncmp(current_path.get_ptr(), "file://", 7) == 0) current_path = current_path.get_ptr() + 7;
 
         t_size match_len = 0;
-        // Ищем длину совпадающей части пути (без учета регистра)
         while (match_len < common_path.length() && match_len < current_path.length() &&
-            tolower(common_path[match_len]) == tolower(current_path[match_len])) {
+            tolower((unsigned char)common_path[match_len]) == tolower((unsigned char)current_path[match_len])) {
             match_len++;
         }
 
         common_path.truncate(match_len);
 
-        // Откатываемся до последнего целого слеша, чтобы не обрезать слово посередине
         slash_idx = common_path.find_last('\\');
         if (slash_idx == pfc::infinite_size) slash_idx = common_path.find_last('/');
         if (slash_idx != pfc::infinite_size) {
             common_path.truncate(slash_idx + 1);
         }
         else {
-            common_path = ""; // Файлы на разных логических дисках (C: и D:)
+            common_path = "";
             break;
         }
     }
 
-    // Запасной план: если файлы на разных дисках, просто сохраняем в папку первого файла
     if (common_path.is_empty()) {
         common_path = p_data.get_item(0)->get_path();
         if (strncmp(common_path.get_ptr(), "file://", 7) == 0) common_path = common_path.get_ptr() + 7;
@@ -91,16 +90,13 @@ pfc::string8 export_manager::get_common_dir(metadb_handle_list_cref p_data) {
     return common_path;
 }
 
-// --- 3. Определение финальной папки для сохранения (учитывая настройки) ---
+// --- 3. Определение финальной папки для сохранения ---
 pfc::string8 export_manager::get_target_dir(metadb_handle_list_cref p_data, int save_mode, const char* custom_dir) {
     if (save_mode == 0) {
-        // Режим: В папке с файлами
         return get_common_dir(p_data);
     }
     else if (save_mode == 1) {
-        // Режим: В указанной папке
         pfc::string8 dir = custom_dir;
-        // Убеждаемся, что путь заканчивается слешем
         if (dir.length() > 0) {
             char last_char = dir.get_ptr()[dir.length() - 1];
             if (last_char != '\\' && last_char != '/') dir.add_string("\\");
@@ -108,7 +104,6 @@ pfc::string8 export_manager::get_target_dir(metadb_handle_list_cref p_data, int 
         return dir;
     }
     else {
-        // Режим: Спрашивать (Вызываем стандартное диалоговое окно Windows)
         CFolderDialog dlg(NULL, L"Select folder to save playlist / CUE", BIF_RETURNONLYFSDIRS | BIF_USENEWUI);
         if (dlg.DoModal() == IDOK) {
             pfc::string8 dir = pfc::stringcvt::string_utf8_from_os(dlg.GetFolderPath()).get_ptr();
@@ -118,7 +113,7 @@ pfc::string8 export_manager::get_target_dir(metadb_handle_list_cref p_data, int 
             }
             return dir;
         }
-        return ""; // Если пользователь нажал "Отмена"
+        return "";
     }
 }
 
@@ -131,24 +126,20 @@ pfc::string8 export_manager::make_relative_path(const char* base_dir, const char
 
     wchar_t relPath[MAX_PATH];
 
-    // API Windows работает с широкими строками
     pfc::stringcvt::string_wide_from_utf8 w_base(base_dir);
     pfc::stringcvt::string_wide_from_utf8 w_track(track_clean.get_ptr());
 
-    // Магия системной библиотеки: сама считает точки и слеши (..\..\folder\file.flac)
     if (PathRelativePathToW(relPath,
         w_base.get_ptr(), FILE_ATTRIBUTE_DIRECTORY,
         w_track.get_ptr(), FILE_ATTRIBUTE_NORMAL))
     {
         pfc::string8 result = pfc::stringcvt::string_utf8_from_wide(relPath).get_ptr();
-        // PathRelativePathTo часто добавляет ".\" в начале файла, уберем это для красоты
         if (strncmp(result.get_ptr(), ".\\", 2) == 0) {
             result = result.get_ptr() + 2;
         }
         return result;
     }
 
-    // Если файлы на разных физических дисках (C: и D:), относительный путь построить нельзя — возвращаем полный
     return track_clean;
 }
 
@@ -156,11 +147,9 @@ pfc::string8 export_manager::make_relative_path(const char* base_dir, const char
 void export_manager::generate_m3u(metadb_handle_list_cref p_data, bool use_extinf) {
     if (p_data.get_count() == 0) return;
 
-    // 1. Узнаем, куда сохранять
     pfc::string8 target_dir = get_target_dir(p_data, cfg_m3u_save_mode, cfg_m3u_custom_dir);
     if (target_dir.is_empty()) return;
 
-    // 2. Формируем имя файла по шаблону
     pfc::string8 playlist_name = format_filename(p_data.get_item(0), cfg_m3u_filename_tpl);
     if (cfg_m3u_extension == 1) playlist_name.add_string(".m3u8");
     else playlist_name.add_string(".m3u");
@@ -168,7 +157,6 @@ void export_manager::generate_m3u(metadb_handle_list_cref p_data, bool use_extin
     pfc::string8 full_path = target_dir;
     full_path.add_string(playlist_name);
 
-    // 3. Открываем файл для записи (в кодировке UTF-8)
     pfc::stringcvt::string_wide_from_utf8 w_full_path(full_path);
 
     FILE* f = nullptr;
@@ -179,26 +167,23 @@ void export_manager::generate_m3u(metadb_handle_list_cref p_data, bool use_extin
         return;
     }
 
-    // Заголовок для EXTINF
+    bool write_failed = false;
+
     if (use_extinf) {
-        fwprintf(f, L"#EXTM3U\n");
+        if (fwprintf(f, L"#EXTM3U\n") < 0) write_failed = true;
     }
 
-    // Компилируем скрипты для вытягивания тегов Артиста, Названия и Длительности
     titleformat_object::ptr script_extinf;
     titleformat_compiler::get()->compile_safe(script_extinf, "%artist% - %title%");
 
     titleformat_object::ptr script_length;
     titleformat_compiler::get()->compile_safe(script_length, "%length_seconds%");
 
-    // Вычисляем общую папку исходников один раз для режима Filename Only
     pfc::string8 source_common_dir = get_common_dir(p_data);
 
-    // 4. Проходимся по всем выделенным трекам
-    for (t_size i = 0; i < p_data.get_count(); ++i) {
+    for (t_size i = 0; i < p_data.get_count() && !write_failed; ++i) {
         metadb_handle_ptr track = p_data.get_item(i);
 
-        // Пишем метаданные EXTINF
         if (use_extinf) {
             pfc::string8 extinf_text, length_text;
             track->format_title(nullptr, extinf_text, script_extinf, nullptr);
@@ -208,35 +193,39 @@ void export_manager::generate_m3u(metadb_handle_list_cref p_data, bool use_extin
             if (length_sec == 0) length_sec = -1;
 
             pfc::stringcvt::string_wide_from_utf8 w_extinf(extinf_text);
-            fwprintf(f, L"#EXTINF:%d,%s\n", length_sec, w_extinf.get_ptr());
+            if (fwprintf(f, L"#EXTINF:%d,%s\n", length_sec, w_extinf.get_ptr()) < 0) write_failed = true;
         }
 
-        // Вычисляем путь к треку согласно настройкам
         pfc::string8 track_path = track->get_path();
+        t_size pipe_idx = track_path.find_first('|');
+        if (pipe_idx != pfc::infinite_size) track_path.truncate(pipe_idx);
+
         pfc::string8 out_path;
 
         if (cfg_m3u_path_mode == 0) {
-            // "Filename only" для M3U: путь относительно общей папки ИСХОДНИКОВ
             out_path = make_relative_path(source_common_dir.get_ptr(), track_path.get_ptr());
         }
         else if (cfg_m3u_path_mode == 1) {
-            // Настоящий Relative: путь относительно папки ПЛЕЙЛИСТА
             out_path = make_relative_path(target_dir.get_ptr(), track_path.get_ptr());
         }
         else {
-            // Полный (Абсолютный)
             out_path = track_path;
             if (strncmp(out_path.get_ptr(), "file://", 7) == 0) {
                 out_path = out_path.get_ptr() + 7;
             }
         }
 
-        // Записываем путь в файл
         pfc::stringcvt::string_wide_from_utf8 w_out_path(out_path);
-        fwprintf(f, L"%s\n", w_out_path.get_ptr());
+        if (fwprintf(f, L"%s\n", w_out_path.get_ptr()) < 0) write_failed = true;
     }
 
-    fclose(f);
+    if (ferror(f)) write_failed = true;
+    if (fclose(f) != 0) write_failed = true;
+
+    if (write_failed) {
+        popup_message::g_show("Произошла ошибка при записи файла (возможно, не хватает места на диске).", "Ошибка");
+        return;
+    }
 
     if (cfg_show_success_msg) {
         pfc::string8 success_msg = "Playlist successfully saved:\n";
@@ -311,11 +300,9 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
     CCueDialog dlg(p_data);
     if (dlg.DoModal(core_api::get_main_window()) == IDOK) {
 
-        // 1. Узнаем, куда сохранять
         pfc::string8 target_dir = get_target_dir(p_data, cfg_cue_save_mode, cfg_cue_custom_dir);
         if (target_dir.is_empty()) return;
 
-        // 2. ФОРМИРУЕМ ИМЯ ФАЙЛА С УЧЕТОМ ДАННЫХ ИЗ ДИАЛОГА
         metadb_handle_ptr first_track = p_data.get_item(0);
         file_info_impl info;
         first_track->get_info(info);
@@ -342,7 +329,6 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
         pfc::string8 full_path = target_dir;
         full_path.add_string(cue_name);
 
-        // 3. Открываем файл (UTF-8)
         pfc::stringcvt::string_wide_from_utf8 w_full_path(full_path);
         FILE* f = nullptr;
         errno_t err = _wfopen_s(&f, w_full_path.get_ptr(), L"wt, ccs=UTF-8");
@@ -352,22 +338,27 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
             return;
         }
 
+        bool write_failed = false;
+
         auto write_tag = [&](const wchar_t* prefix, pfc::string8& val, bool is_rem) {
-            if (!val.is_empty()) {
-                pfc::stringcvt::string_wide_from_utf8 w_val(val);
-                if (is_rem) fwprintf(f, L"REM %s \"%s\"\n", prefix, w_val.get_ptr());
-                else fwprintf(f, L"%s \"%s\"\n", prefix, w_val.get_ptr());
+            if (!val.is_empty() && !write_failed) {
+                pfc::string8 escaped = escape_cue_string(val.get_ptr());
+                pfc::stringcvt::string_wide_from_utf8 w_val(escaped);
+                if (is_rem) {
+                    if (fwprintf(f, L"REM %s \"%s\"\n", prefix, w_val.get_ptr()) < 0) write_failed = true;
+                }
+                else {
+                    if (fwprintf(f, L"%s \"%s\"\n", prefix, w_val.get_ptr()) < 0) write_failed = true;
+                }
             }
             };
 
-        // Пишем глобальные теги альбома
         write_tag(L"GENRE", dlg.m_genre, true);
         write_tag(L"DATE", dlg.m_date, true);
         write_tag(L"COMMENT", dlg.m_comment, true);
         write_tag(L"PERFORMER", dlg.m_artist, false);
         write_tag(L"TITLE", dlg.m_album, false);
 
-        // --- ТОЧНОЕ РАСПОЗНАВАНИЕ: Виртуальный CUE-образ или набор отдельных файлов ---
         bool is_cue_image = false;
         if (p_data.get_count() > 1) {
             pfc::string8 path0 = first_track->get_path();
@@ -378,93 +369,136 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
             t_size pipe1 = path1.find_first('|');
             if (pipe1 != pfc::infinite_size) path1.truncate(pipe1);
 
-            // Если базовые пути одинаковы (субсонги одного контейнера) - это образ
             if (path0 == path1) {
                 is_cue_image = true;
             }
         }
 
-        // Подготавливаем скрипты тегов трека
         titleformat_object::ptr script_track_title;
         titleformat_compiler::get()->compile_safe(script_track_title, "[%title%]");
 
         titleformat_object::ptr script_track_artist;
-        titleformat_object::ptr script_filename_ext;
         titleformat_compiler::get()->compile_safe(script_track_artist, "[%artist%]");
-        titleformat_compiler::get()->compile_safe(script_filename_ext, "%filename_ext%");
 
-        if (is_cue_image) {
-            // === РЕЖИМ 1: ВИРУАТАЛЬНЫЙ CUE-ОБРАЗ (Один файл контейнер на все треки + таймкоды) ===
+        if (is_cue_image && !write_failed) {
+            pfc::string8 track_path = first_track->get_path();
+            t_size pipe_idx = track_path.find_first('|');
+            if (pipe_idx != pfc::infinite_size) track_path.truncate(pipe_idx);
+            if (strncmp(track_path.get_ptr(), "file://", 7) == 0) track_path = track_path.get_ptr() + 7;
+
+            t_size slash_idx = track_path.find_last('\\');
+            if (slash_idx == pfc::infinite_size) slash_idx = track_path.find_last('/');
+
+            pfc::string8 check_dir = track_path;
+            pfc::string8 file_only;
+            if (slash_idx != pfc::infinite_size) {
+                check_dir.truncate(slash_idx + 1);
+                file_only = track_path.get_ptr() + slash_idx + 1;
+            }
+            else {
+                check_dir = "";
+                file_only = track_path;
+            }
+
+            // Абсолютно надежный способ: запрашиваем у самого foobar2000 через спец-поле метаданных имя файла аудиоконтейнера (или реальный файл из info)
             pfc::string8 container_filename;
-            first_track->format_title(nullptr, container_filename, script_filename_ext, nullptr);
+            titleformat_object::ptr script_path;
+            titleformat_compiler::get()->compile_safe(script_path, "%path%");
+            pfc::string8 full_audio_path;
+            first_track->format_title(nullptr, full_audio_path, script_path, nullptr);
+            if (strncmp(full_audio_path.get_ptr(), "file://", 7) == 0) full_audio_path = full_audio_path.get_ptr() + 7;
+            t_size p_idx = full_audio_path.find_first('|');
+            if (p_idx != pfc::infinite_size) full_audio_path.truncate(p_idx);
 
-            bool ends_with_cue = false;
-            if (container_filename.length() >= 4) {
-                const char* ptr = container_filename.get_ptr() + container_filename.length() - 4;
-                if (_stricmp(ptr, ".cue") == 0) {
-                    ends_with_cue = true;
+            t_size s_idx = full_audio_path.find_last('\\');
+            if (s_idx == pfc::infinite_size) s_idx = full_audio_path.find_last('/');
+
+            pfc::string8 real_audio_filename;
+            if (s_idx != pfc::infinite_size) {
+                real_audio_filename = full_audio_path.get_ptr() + s_idx + 1;
+            }
+            else {
+                real_audio_filename = full_audio_path;
+            }
+
+            // Если трек ссылался на .cue, то в реальном пути будет имя .cue. Пробуем прочитать первую строку CUE-файла, чтобы узнать оригинальный FILE, либо ищем файл с тем же именем и расширением .flac/.ape рядом.
+            t_size dot_idx = real_audio_filename.find_last('.');
+            if (dot_idx != pfc::infinite_size && _stricmp(real_audio_filename.get_ptr() + dot_idx, ".cue") == 0) {
+                // Пытаемся открыть исходный .cue и прочитать из него строку FILE
+                pfc::stringcvt::string_wide_from_utf8 w_full_cue(full_audio_path);
+                FILE* cue_in = nullptr;
+                if (_wfopen_s(&cue_in, w_full_cue.get_ptr(), L"rt, ccs=UTF-8") == 0 && cue_in != nullptr) {
+                    wchar_t line_buf[512];
+                    while (fgetws(line_buf, 512, cue_in) != nullptr) {
+                        // Ищем строку начинающуюся с FILE
+                        if (wcsncmp(line_buf, L"FILE ", 5) == 0 || wcsncmp(line_buf, L"file ", 5) == 0) {
+                            // Парсим имя в кавычках
+                            wchar_t* first_q = wcschr(line_buf, L'\"');
+                            if (first_q) {
+                                wchar_t* second_q = wcschr(first_q + 1, L'\"');
+                                if (second_q) {
+                                    *second_q = L'\0';
+                                    pfc::string8 parsed_name = pfc::stringcvt::string_utf8_from_wide(first_q + 1).get_ptr();
+                                    // Оставляем только имя файла, если там был путь
+                                    t_size parsed_slash = parsed_name.find_last('\\');
+                                    if (parsed_slash == pfc::infinite_size) parsed_slash = parsed_name.find_last('/');
+                                    if (parsed_slash != pfc::infinite_size) {
+                                        real_audio_filename = parsed_name.get_ptr() + parsed_slash + 1;
+                                    }
+                                    else {
+                                        real_audio_filename = parsed_name;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    fclose(cue_in);
                 }
             }
 
-            if (container_filename.is_empty() || ends_with_cue) {
-                pfc::string8 track_path = first_track->get_path();
-                t_size pipe_idx = track_path.find_first('|');
-                if (pipe_idx != pfc::infinite_size) track_path.truncate(pipe_idx);
+            // Если вытащить из CUE не удалось, ищем файл с тем же базовым именем и расширением .flac / .ape / .wav рядом
+            t_size r_dot = real_audio_filename.find_last('.');
+            if (r_dot != pfc::infinite_size && _stricmp(real_audio_filename.get_ptr() + r_dot, ".cue") == 0) {
+                pfc::string8 base_name;
+                base_name.set_string(real_audio_filename.get_ptr(), r_dot);
 
-                if (strncmp(track_path.get_ptr(), "file://", 7) == 0) track_path = track_path.get_ptr() + 7;
+                const wchar_t* candidate_exts[] = { L".flac", L".ape", L".wv", L".m4a", L".mp3", L".wav", L".ogg", L".dsf", L".dff" };
+                pfc::string8 matched_ext = ".flac"; // по умолчанию для музыки чаще flac
 
-                t_size slash_idx = track_path.find_last('\\');
-                if (slash_idx == pfc::infinite_size) slash_idx = track_path.find_last('/');
+                for (auto ce : candidate_exts) {
+                    pfc::string8 test_path = check_dir;
+                    test_path.add_string(base_name);
+                    pfc::stringcvt::string_utf8_from_wide u_ce(ce);
+                    test_path.add_string(u_ce.get_ptr());
 
-                pfc::string8 file_only;
-                if (slash_idx != pfc::infinite_size) {
-                    file_only = track_path.get_ptr() + slash_idx + 1;
-                }
-                else {
-                    file_only = track_path;
-                }
-
-                // Заменяем .cue на .wav (или оставляем оригинальное расширение аудиофайла, если оно не .cue)
-                t_size dot_idx = file_only.find_last('.');
-                if (dot_idx != pfc::infinite_size) {
-                    const char* ext = file_only.get_ptr() + dot_idx;
-                    if (_stricmp(ext, ".cue") == 0) {
-                        file_only.truncate(dot_idx);
-                        file_only.add_string(".wav");
+                    pfc::stringcvt::string_wide_from_utf8 w_test(test_path);
+                    if (PathFileExistsW(w_test.get_ptr())) {
+                        matched_ext = u_ce.get_ptr();
+                        break;
                     }
                 }
-                container_filename = file_only;
+                base_name.add_string(matched_ext);
+                real_audio_filename = base_name;
             }
 
+            container_filename = real_audio_filename;
+
+            // Формируем путь для строки FILE в зависимости от настроек
             pfc::string8 file_token_path;
             if (cfg_cue_path_mode == 0) {
                 file_token_path = container_filename;
             }
             else {
-                pfc::string8 track_path = first_track->get_path();
-                t_size pipe_idx = track_path.find_first('|');
-                if (pipe_idx != pfc::infinite_size) track_path.truncate(pipe_idx);
-
-                if (strncmp(track_path.get_ptr(), "file://", 7) == 0) track_path = track_path.get_ptr() + 7;
-
-                t_size slash_idx = track_path.find_last('\\');
-                if (slash_idx == pfc::infinite_size) slash_idx = track_path.find_last('/');
-
-                if (slash_idx != pfc::infinite_size) {
-                    track_path.truncate(slash_idx + 1);
-                    track_path.add_string(container_filename);
-                    file_token_path = track_path;
-                }
-                else {
-                    file_token_path = container_filename;
-                }
+                file_token_path = check_dir;
+                file_token_path.add_string(container_filename);
             }
 
             pfc::stringcvt::string_wide_from_utf8 w_audio_file(file_token_path);
-            fwprintf(f, L"FILE \"%s\" WAVE\n", w_audio_file.get_ptr());
+            if (fwprintf(f, L"FILE \"%s\" WAVE\n", w_audio_file.get_ptr()) < 0) write_failed = true;
 
             double accumulated_seconds = 0.0;
-            for (t_size i = 0; i < p_data.get_count(); ++i) {
+            for (t_size i = 0; i < p_data.get_count() && !write_failed; ++i) {
                 metadb_handle_ptr track = p_data.get_item(i);
 
                 int total_frames = (int)(accumulated_seconds * 75.0);
@@ -472,37 +506,41 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
                 int seconds = (total_frames / 75) % 60;
                 int frames = total_frames % 75;
 
-                fwprintf(f, L"  TRACK %02d AUDIO\n", (int)(i + 1));
+                if (fwprintf(f, L"  TRACK %02d AUDIO\n", (int)(i + 1)) < 0) write_failed = true;
 
                 pfc::string8 t_title, t_artist;
                 track->format_title(nullptr, t_title, script_track_title, nullptr);
                 track->format_title(nullptr, t_artist, script_track_artist, nullptr);
 
-                if (!t_title.is_empty()) {
-                    pfc::stringcvt::string_wide_from_utf8 w_title(t_title);
-                    fwprintf(f, L"    TITLE \"%s\"\n", w_title.get_ptr());
+                if (!t_title.is_empty() && strcmp(t_title.get_ptr(), " ") != 0) {
+                    pfc::string8 esc_title = escape_cue_string(t_title.get_ptr());
+                    pfc::stringcvt::string_wide_from_utf8 w_title(esc_title);
+                    if (fwprintf(f, L"    TITLE \"%s\"\n", w_title.get_ptr()) < 0) write_failed = true;
                 }
 
                 if (!t_artist.is_empty() && t_artist != dlg.m_artist) {
-                    pfc::stringcvt::string_wide_from_utf8 w_artist(t_artist);
-                    fwprintf(f, L"    PERFORMER \"%s\"\n", w_artist.get_ptr());
+                    pfc::string8 esc_artist = escape_cue_string(t_artist.get_ptr());
+                    pfc::stringcvt::string_wide_from_utf8 w_artist(esc_artist);
+                    if (fwprintf(f, L"    PERFORMER \"%s\"\n", w_artist.get_ptr()) < 0) write_failed = true;
                 }
 
-                fwprintf(f, L"    INDEX 01 %02d:%02d:%02d\n", minutes, seconds, frames);
+                if (fwprintf(f, L"    INDEX 01 %02d:%02d:%02d\n", minutes, seconds, frames) < 0) write_failed = true;
 
                 accumulated_seconds += track->get_length();
             }
         }
-        else {
-            // === РЕЖИМ 2: НАБОР ОТДЕЛЬНЫХ АУДИОФАЙЛОВ (Классический CUE со своими FILE для каждого трека) ===
-            for (t_size i = 0; i < p_data.get_count(); ++i) {
+        else if (!write_failed) {
+            for (t_size i = 0; i < p_data.get_count() && !write_failed; ++i) {
                 metadb_handle_ptr track = p_data.get_item(i);
 
                 pfc::string8 track_path = track->get_path();
+                t_size pipe_idx = track_path.find_first('|');
+                if (pipe_idx != pfc::infinite_size) track_path.truncate(pipe_idx);
+                if (strncmp(track_path.get_ptr(), "file://", 7) == 0) track_path = track_path.get_ptr() + 7;
+
                 pfc::string8 out_path;
 
                 if (cfg_cue_path_mode == 0) {
-                    // "Filename only" для CUE: Строго только имя файла с расширением, БЕЗ каких-либо папок
                     t_size slash_idx = track_path.find_last('\\');
                     if (slash_idx == pfc::infinite_size) slash_idx = track_path.find_last('/');
 
@@ -514,35 +552,41 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
                     }
                 }
                 else {
-                    // "Absolute" (Полный путь)
                     out_path = track_path;
-                    if (strncmp(out_path.get_ptr(), "file://", 7) == 0) out_path = out_path.get_ptr() + 7;
                 }
 
                 pfc::stringcvt::string_wide_from_utf8 w_out_path(out_path);
 
-                fwprintf(f, L"FILE \"%s\" WAVE\n", w_out_path.get_ptr());
-                fwprintf(f, L"  TRACK %02d AUDIO\n", (int)(i + 1));
+                if (fwprintf(f, L"FILE \"%s\" WAVE\n", w_out_path.get_ptr()) < 0) write_failed = true;
+                if (fwprintf(f, L"  TRACK %02d AUDIO\n", (int)(i + 1)) < 0) write_failed = true;
 
                 pfc::string8 t_title, t_artist;
                 track->format_title(nullptr, t_title, script_track_title, nullptr);
                 track->format_title(nullptr, t_artist, script_track_artist, nullptr);
 
-                if (!t_title.is_empty()) {
-                    pfc::stringcvt::string_wide_from_utf8 w_title(t_title);
-                    fwprintf(f, L"    TITLE \"%s\"\n", w_title.get_ptr());
+                if (!t_title.is_empty() && strcmp(t_title.get_ptr(), " ") != 0) {
+                    pfc::string8 esc_title = escape_cue_string(t_title.get_ptr());
+                    pfc::stringcvt::string_wide_from_utf8 w_title(esc_title);
+                    if (fwprintf(f, L"    TITLE \"%s\"\n", w_title.get_ptr()) < 0) write_failed = true;
                 }
 
                 if (!t_artist.is_empty() && t_artist != dlg.m_artist) {
-                    pfc::stringcvt::string_wide_from_utf8 w_artist(t_artist);
-                    fwprintf(f, L"    PERFORMER \"%s\"\n", w_artist.get_ptr());
+                    pfc::string8 esc_artist = escape_cue_string(t_artist.get_ptr());
+                    pfc::stringcvt::string_wide_from_utf8 w_artist(esc_artist);
+                    if (fwprintf(f, L"    PERFORMER \"%s\"\n", w_artist.get_ptr()) < 0) write_failed = true;
                 }
 
-                fwprintf(f, L"    INDEX 01 00:00:00\n");
+                if (fwprintf(f, L"    INDEX 01 00:00:00\n") < 0) write_failed = true;
             }
         }
 
-        fclose(f);
+        if (ferror(f)) write_failed = true;
+        if (fclose(f) != 0) write_failed = true;
+
+        if (write_failed) {
+            popup_message::g_show("Произошла ошибка при записи CUE файла (возможно, недостаточно места на диске).", "Ошибка");
+            return;
+        }
 
         if (cfg_show_success_msg) {
             pfc::string8 success_msg = "CUE successfully saved:\n";
