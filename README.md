@@ -26,6 +26,9 @@ Select one or more tracks in your playlist, right-click, and navigate to the con
 ## v1.2
 * Improved overall stability, fixed parsing issues, and optimized file-saving routines.
 
+## Patch 1.2.1
+* Fixed incorrect handling of non-ASCII characters in saved file names.
+
 ---
 
 <a id="русский"></a>
@@ -52,3 +55,6 @@ Select one or more tracks in your playlist, right-click, and navigate to the con
 
 ## v1.2
 * Повышена общая стабильность работы, исправлены ошибки парсинга и оптимизированы алгоритмы сохранения файлов.
+
+## Патч 1.2.1
+* Исправлена проблема с некорректным отображением нестандартных символов в именах сохраняемых файлов.

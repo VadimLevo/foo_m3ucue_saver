@@ -67,19 +67,6 @@ pfc::string8 export_manager::format_filename(metadb_handle_ptr track, const char
     filename.replace_char('|', '-');
     filename.replace_char('\"', '\'');
 
-    // Удаление управляющих символов Windows (0x00 - 0x1F)
-    pfc::string8 safe_filename;
-    for (t_size i = 0; i < filename.length(); ++i) {
-        unsigned char c = (unsigned char)filename[i];
-        if (c >= 32) {
-            safe_filename.add_char(c);
-        }
-        else {
-            safe_filename.add_char('_');
-        }
-    }
-    filename = safe_filename;
-
     while (filename.length() > 0 &&
         (filename[filename.length() - 1] == ' ' || filename[filename.length() - 1] == '.')) {
         filename.truncate(filename.length() - 1);
@@ -186,7 +173,7 @@ pfc::string8 export_manager::make_relative_path(const char* base_dir, const char
     return track_clean;
 }
 
-// --- Генерация плейлиста M3U / M3U8 с явным BOM и атомарной заменой ---
+// --- Генерация плейлиста M3U / M3U8 с безопасной атомарной заменой ---
 void export_manager::generate_m3u(metadb_handle_list_cref p_data, bool use_extinf) {
     if (p_data.get_count() == 0) return;
 
@@ -206,7 +193,7 @@ void export_manager::generate_m3u(metadb_handle_list_cref p_data, bool use_extin
     pfc::stringcvt::string_wide_from_utf8 w_full_path(full_path.get_ptr());
 
     FILE* f = nullptr;
-    errno_t err = _wfopen_s(&f, w_temp_path.get_ptr(), L"wb");
+    errno_t err = _wfopen_s(&f, w_temp_path.get_ptr(), L"wt, ccs=UTF-8");
 
     if (err != 0 || f == nullptr) {
         popup_message::g_show("Не удалось создать временный файл. Проверьте права доступа к папке.", "Ошибка");
@@ -215,17 +202,8 @@ void export_manager::generate_m3u(metadb_handle_list_cref p_data, bool use_extin
 
     bool write_failed = false;
 
-    // Запись UTF-8 BOM
-    unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
-    if (fwrite(bom, 1, 3, f) != 3) write_failed = true;
-
-    auto write_utf8_line = [&](const char* utf8_str) {
-        if (write_failed) return;
-        if (fprintf(f, "%s\n", utf8_str) < 0) write_failed = true;
-        };
-
-    if (use_extinf && !write_failed) {
-        write_utf8_line("#EXTM3U");
+    if (use_extinf) {
+        if (fwprintf(f, L"#EXTM3U\n") < 0) write_failed = true;
     }
 
     titleformat_object::ptr script_extinf;
@@ -247,9 +225,8 @@ void export_manager::generate_m3u(metadb_handle_list_cref p_data, bool use_extin
             int length_sec = atoi(length_text.get_ptr());
             if (length_sec == 0) length_sec = -1;
 
-            pfc::string_formatter extinf_line;
-            extinf_line << "#EXTINF:" << length_sec << "," << extinf_text;
-            write_utf8_line(extinf_line.get_ptr());
+            pfc::stringcvt::string_wide_from_utf8 w_extinf(extinf_text.get_ptr());
+            if (fwprintf(f, L"#EXTINF:%d,%s\n", length_sec, w_extinf.get_ptr()) < 0) write_failed = true;
         }
 
         pfc::string8 track_path = track->get_path();
@@ -271,7 +248,8 @@ void export_manager::generate_m3u(metadb_handle_list_cref p_data, bool use_extin
             }
         }
 
-        write_utf8_line(out_path.get_ptr());
+        pfc::stringcvt::string_wide_from_utf8 w_out_path(out_path.get_ptr());
+        if (fwprintf(f, L"%s\n", w_out_path.get_ptr()) < 0) write_failed = true;
     }
 
     if (ferror(f)) write_failed = true;
@@ -304,11 +282,9 @@ public:
     enum { IDD = IDD_CUE_DIALOG };
 
     pfc::string8 m_artist, m_album, m_date, m_genre, m_comment;
-    metadb_handle_list m_data;
+    metadb_handle_list_cref m_data;
 
-    CCueDialog(metadb_handle_list_cref p_data) {
-        m_data.add_items(p_data);
-    }
+    CCueDialog(metadb_handle_list_cref p_data) : m_data(p_data) {}
 
     BEGIN_MSG_MAP(CCueDialog)
         MSG_WM_INITDIALOG(OnInitDialog)
@@ -400,7 +376,7 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
         pfc::stringcvt::string_wide_from_utf8 w_full_path(full_path.get_ptr());
 
         FILE* f = nullptr;
-        errno_t err = _wfopen_s(&f, w_temp_path.get_ptr(), L"wb");
+        errno_t err = _wfopen_s(&f, w_temp_path.get_ptr(), L"wt, ccs=UTF-8");
 
         if (err != 0 || f == nullptr) {
             popup_message::g_show("Не удалось создать временный CUE файл. Проверьте права доступа к папке.", "Ошибка");
@@ -409,33 +385,24 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
 
         bool write_failed = false;
 
-        unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
-        if (fwrite(bom, 1, 3, f) != 3) write_failed = true;
-
-        auto write_utf8_line = [&](const char* utf8_str) {
-            if (write_failed) return;
-            if (fprintf(f, "%s\n", utf8_str) < 0) write_failed = true;
-            };
-
-        auto write_tag = [&](const char* prefix, pfc::string8& val, bool is_rem) {
+        auto write_tag = [&](const wchar_t* prefix, pfc::string8& val, bool is_rem) {
             if (!val.is_empty() && !write_failed) {
                 pfc::string8 escaped = escape_cue_string(val.get_ptr());
-                pfc::string_formatter line;
+                pfc::stringcvt::string_wide_from_utf8 w_val(escaped.get_ptr());
                 if (is_rem) {
-                    line << "REM " << prefix << " \"" << escaped << "\"";
+                    if (fwprintf(f, L"REM %s \"%s\"\n", prefix, w_val.get_ptr()) < 0) write_failed = true;
                 }
                 else {
-                    line << prefix << " \"" << escaped << "\"";
+                    if (fwprintf(f, L"%s \"%s\"\n", prefix, w_val.get_ptr()) < 0) write_failed = true;
                 }
-                write_utf8_line(line.get_ptr());
             }
             };
 
-        write_tag("GENRE", dlg.m_genre, true);
-        write_tag("DATE", dlg.m_date, true);
-        write_tag("COMMENT", dlg.m_comment, true);
-        write_tag("PERFORMER", dlg.m_artist, false);
-        write_tag("TITLE", dlg.m_album, false);
+        write_tag(L"GENRE", dlg.m_genre, true);
+        write_tag(L"DATE", dlg.m_date, true);
+        write_tag(L"COMMENT", dlg.m_comment, true);
+        write_tag(L"PERFORMER", dlg.m_artist, false);
+        write_tag(L"TITLE", dlg.m_album, false);
 
         bool is_cue_image = false;
         if (p_data.get_count() > 0) {
@@ -461,36 +428,6 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
 
         titleformat_object::ptr script_track_artist;
         titleformat_compiler::get()->compile_safe(script_track_artist, "[%artist%]");
-
-        auto write_single_track_block = [&](int track_num, metadb_handle_ptr track, const char* index_str) {
-            if (write_failed) return;
-
-            pfc::string_formatter track_header;
-            track_header << "  TRACK " << (track_num < 10 ? "0" : "") << track_num << " AUDIO";
-            write_utf8_line(track_header.get_ptr());
-
-            pfc::string8 t_title, t_artist;
-            track->format_title(nullptr, t_title, script_track_title, nullptr);
-            track->format_title(nullptr, t_artist, script_track_artist, nullptr);
-
-            if (!t_title.is_empty() && strcmp(t_title.get_ptr(), " ") != 0) {
-                pfc::string8 esc_title = escape_cue_string(t_title.get_ptr());
-                pfc::string_formatter title_line;
-                title_line << "    TITLE \"" << esc_title << "\"";
-                write_utf8_line(title_line.get_ptr());
-            }
-
-            if (!t_artist.is_empty() && t_artist != dlg.m_artist) {
-                pfc::string8 esc_artist = escape_cue_string(t_artist.get_ptr());
-                pfc::string_formatter artist_line;
-                artist_line << "    PERFORMER \"" << esc_artist << "\"";
-                write_utf8_line(artist_line.get_ptr());
-            }
-
-            pfc::string_formatter index_line;
-            index_line << "    INDEX 01 " << index_str;
-            write_utf8_line(index_line.get_ptr());
-            };
 
         if (is_cue_image && !write_failed) {
             pfc::string8 track_path = first_track->get_path();
@@ -526,7 +463,7 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
             bool is_source_cue = (r_dot != pfc::infinite_size && _stricmp(full_audio_path.get_ptr() + r_dot, ".cue") == 0);
 
             if (is_source_cue) {
-                pfc::stringcvt::string_wide_from_utf8 w_full_cue(full_audio_path);
+                pfc::stringcvt::string_wide_from_utf8 w_full_cue(full_audio_path.get_ptr());
                 FILE* cue_in = nullptr;
                 if (_wfopen_s(&cue_in, w_full_cue.get_ptr(), L"rt, ccs=UTF-8") == 0 && cue_in != nullptr) {
                     std::vector<wchar_t> line_buf(2048);
@@ -544,6 +481,7 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
                                 }
                             }
                             else {
+                                // FILE без кавычек: FILE track01.wav WAVE
                                 wchar_t* start = ptr + 5;
                                 while (*start == L' ' || *start == L'\t') start++;
                                 wchar_t* end = start;
@@ -660,9 +598,8 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
                         }
                     }
 
-                    pfc::string_formatter file_line;
-                    file_line << "FILE \"" << file_token_path << "\" WAVE";
-                    write_utf8_line(file_line.get_ptr());
+                    pfc::stringcvt::string_wide_from_utf8 w_audio_file(file_token_path.get_ptr());
+                    if (fwprintf(f, L"FILE \"%s\" WAVE\n", w_audio_file.get_ptr()) < 0) write_failed = true;
                 }
 
                 pfc::string8 index_str;
@@ -682,7 +619,25 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
                     index_str = index_buf;
                 }
 
-                write_single_track_block((int)(i + 1), track, index_str.get_ptr());
+                if (fwprintf(f, L"  TRACK %02d AUDIO\n", (int)(i + 1)) < 0) write_failed = true;
+
+                pfc::string8 t_title, t_artist;
+                track->format_title(nullptr, t_title, script_track_title, nullptr);
+                track->format_title(nullptr, t_artist, script_track_artist, nullptr);
+
+                if (!t_title.is_empty() && strcmp(t_title.get_ptr(), " ") != 0) {
+                    pfc::string8 esc_title = escape_cue_string(t_title.get_ptr());
+                    pfc::stringcvt::string_wide_from_utf8 w_title(esc_title.get_ptr());
+                    if (fwprintf(f, L"    TITLE \"%s\"\n", w_title.get_ptr()) < 0) write_failed = true;
+                }
+
+                if (!t_artist.is_empty() && t_artist != dlg.m_artist) {
+                    pfc::string8 esc_artist = escape_cue_string(t_artist.get_ptr());
+                    pfc::stringcvt::string_wide_from_utf8 w_artist(esc_artist.get_ptr());
+                    if (fwprintf(f, L"    PERFORMER \"%s\"\n", w_artist.get_ptr()) < 0) write_failed = true;
+                }
+
+                if (fwprintf(f, L"    INDEX 01 %s\n", pfc::stringcvt::string_wide_from_utf8(index_str.get_ptr()).get_ptr()) < 0) write_failed = true;
 
                 accumulated_seconds += track->get_length();
             }
@@ -713,11 +668,28 @@ void export_manager::generate_cue_with_dialog(metadb_handle_list_cref p_data) {
                     out_path = track_path;
                 }
 
-                pfc::string_formatter file_line;
-                file_line << "FILE \"" << out_path << "\" WAVE";
-                write_utf8_line(file_line.get_ptr());
+                pfc::stringcvt::string_wide_from_utf8 w_out_path(out_path.get_ptr());
 
-                write_single_track_block((int)(i + 1), track, "00:00:00");
+                if (fwprintf(f, L"FILE \"%s\" WAVE\n", w_out_path.get_ptr()) < 0) write_failed = true;
+                if (fwprintf(f, L"  TRACK %02d AUDIO\n", (int)(i + 1)) < 0) write_failed = true;
+
+                pfc::string8 t_title, t_artist;
+                track->format_title(nullptr, t_title, script_track_title, nullptr);
+                track->format_title(nullptr, t_artist, script_track_artist, nullptr);
+
+                if (!t_title.is_empty() && strcmp(t_title.get_ptr(), " ") != 0) {
+                    pfc::string8 esc_title = escape_cue_string(t_title.get_ptr());
+                    pfc::stringcvt::string_wide_from_utf8 w_title(esc_title.get_ptr());
+                    if (fwprintf(f, L"    TITLE \"%s\"\n", w_title.get_ptr()) < 0) write_failed = true;
+                }
+
+                if (!t_artist.is_empty() && t_artist != dlg.m_artist) {
+                    pfc::string8 esc_artist = escape_cue_string(t_artist.get_ptr());
+                    pfc::stringcvt::string_wide_from_utf8 w_artist(esc_artist.get_ptr());
+                    if (fwprintf(f, L"    PERFORMER \"%s\"\n", w_artist.get_ptr()) < 0) write_failed = true;
+                }
+
+                if (fwprintf(f, L"    INDEX 01 00:00:00\n") < 0) write_failed = true;
             }
         }
 

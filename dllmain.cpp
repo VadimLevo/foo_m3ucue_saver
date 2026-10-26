@@ -3,7 +3,7 @@
 // Декларация информации о плагине (название, версия, описание)
 DECLARE_COMPONENT_VERSION(
     "CUE & M3U Saver",
-    "1.2.0",
+    "1.2.1",
     "Playlist and CUE sheet exporter. Compiled: " __DATE__
 );
 
